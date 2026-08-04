@@ -165,15 +165,15 @@ def cbt_selected_index(qid, prefix):
 
 
 def pick_exam_pool():
-    """실전 시험 모드: 과목별 공식 문항 수(10/10/30)만큼 개념 중복 없이 무작위 출제."""
+    """실전 시험 모드: 과목별 공식 문항 수(10/10/30)만큼 개념 중복 없이 무작위로 뽑되,
+    실제 시험지처럼 1->2->3과목 순서로 정렬해 반환한다(과목 내부만 무작위)."""
     groups = get_core_groups()
     ids = []
     for s, n in EXAM_SUBJECT_COUNTS.items():
         core_ids = list(groups[s].keys())
         random.shuffle(core_ids)
-        for c in core_ids[:n]:
-            ids.append(random.choice(groups[s][c]))
-    random.shuffle(ids)
+        subj_ids = [random.choice(groups[s][c]) for c in core_ids[:n]]
+        ids.extend(subj_ids)
     return ids
 
 
@@ -188,13 +188,13 @@ def pick_cbt_pool(subjects, limit=None):
 
 def pick_cbt_exam_pool():
     """CBT 실전 모드: 실제 ADsP 출제 기준(1과목10·2과목10·3과목30)과 동일한 비율로
-    기출문제 풀에서 무작위 출제한다."""
+    기출문제 풀에서 무작위로 뽑되, 실제 시험지처럼 1->2->3과목 순서로 정렬해 반환한다
+    (과목 내부만 무작위)."""
     ids = []
     for s, n in EXAM_SUBJECT_COUNTS.items():
         subj_ids = [qid for qid in CBT_IDS if QUESTIONS[qid]["subject"] == s]
         random.shuffle(subj_ids)
         ids.extend(subj_ids[:n])
-    random.shuffle(ids)
     return ids
 
 
