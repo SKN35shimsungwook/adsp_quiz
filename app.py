@@ -200,7 +200,7 @@ def start_quiz(ids, title, exam_mode=False):
     ss.correct_count = 0
     ss.wrong_ids = []
     ss.quiz_title = title
-    ss.nav = "퀴즈"
+    ss["_pending_nav"] = "퀴즈"
     ss.exam_mode = exam_mode
     ss.exam_subject_correct = {1: 0, 2: 0, 3: 0}
 
@@ -222,7 +222,7 @@ def start_cbt(view, subjects):
     ss.cbt_submitted = False
     ss.cbt_checked = set()
     ss.cbt_recorded = set()
-    ss.nav = "CBT 모드"
+    ss["_pending_nav"] = "CBT 모드"
 
 
 def quit_cbt():
@@ -234,6 +234,11 @@ def quit_cbt():
     ss.cbt_recorded = set()
 
 
+# 다른 탭의 버튼(오답 복습, 집중 풀기 등)이 예약해 둔 탭 전환을 위젯이 그려지기 전에 반영한다.
+# (위젯이 이미 그려진 뒤에는 key="nav" 상태를 코드에서 직접 바꿀 수 없다는 Streamlit 제약 때문)
+if "_pending_nav" in ss:
+    ss["nav"] = ss.pop("_pending_nav")
+
 # ---------- sidebar ----------
 with st.sidebar:
     st.header("ADsP 핵심요약 퀴즈")
@@ -242,7 +247,10 @@ with st.sidebar:
     ss.user = user_input.strip()
     st.divider()
     nav_options = ["퀴즈", "CBT 모드", "개념노트", "오답노트", "자주 틀리는 개념"]
-    ss.nav = st.radio("메뉴", nav_options, index=nav_options.index(ss.nav))
+    # key="nav"로 위젯을 세션 상태(ss.nav)에 직접 바인딩한다.
+    # (과거에는 index=로만 동기화했는데, 다른 탭의 버튼이 ss.nav를 바꿔도
+    #  위젯 자체의 내부 상태가 우선시되어 탭 전환이 씹히는 버그가 있었다.)
+    st.radio("메뉴", nav_options, key="nav")
     if ss.queue is not None:
         st.divider()
         if st.button("퀴즈 그만하기", width="stretch"):
