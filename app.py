@@ -429,11 +429,11 @@ if ss.nav == "퀴즈":
 elif ss.nav == "CBT 모드":
     if ss.cbt_view is None:
         st.subheader("CBT 모드 — 실제 기출복원 문제")
-        st.caption(f"정답·해설이 확인된 ADsP 기출복원 문제 {len(CBT_IDS)}문항으로 연습합니다 (현재 1·2과목).")
+        st.caption(f"정답·해설이 확인된 ADsP 기출복원 문제 {len(CBT_IDS)}문항으로 연습합니다 (1·2·3과목).")
 
-        cbt_subject_choice = st.radio("과목 선택", ["전체", "1과목", "2과목"], horizontal=True, key="cbt_subject_choice")
+        cbt_subject_choice = st.radio("과목 선택", ["전체", "1과목", "2과목", "3과목"], horizontal=True, key="cbt_subject_choice")
         if cbt_subject_choice == "전체":
-            cbt_subjects = [1, 2]
+            cbt_subjects = [1, 2, 3]
         else:
             cbt_subjects = [int(cbt_subject_choice[0])]
 
