@@ -260,6 +260,7 @@ ss.setdefault("ox_correct", 0)
 ss.setdefault("ox_answered", False)
 ss.setdefault("ox_choice", None)
 ss.setdefault("ox_wrong_view", False)
+ss.setdefault("card_wrong_view", False)
 
 
 def start_quiz(ids, title, exam_mode=False):
@@ -743,6 +744,8 @@ elif ss.nav == "개념노트":
                             st.markdown(f'<div class="qbox">{c["question"]}</div>', unsafe_allow_html=True)
                         else:
                             st.markdown(f'<div class="qbox">{blank_sentence}</div>', unsafe_allow_html=True)
+                            hint = " · ".join(f"{CIRCLE[i]} {ch}" for i, ch in enumerate(choices))
+                            st.caption(f"보기 중에서 빈칸에 들어갈 말을 골라 입력하세요 — {hint}")
 
                     result = ss.get(result_key)
                     if result is None:
@@ -753,11 +756,15 @@ elif ss.nav == "개념노트":
                         ic1, ic2 = st.columns([1, 1])
                         with ic1:
                             if st.button("확인", key=f"card_check_{c['id']}_{card_mode}", width="stretch"):
-                                ss[result_key] = _answer_matches(user_ans, answer_text)
+                                is_correct = _answer_matches(user_ans, answer_text)
+                                ss[result_key] = is_correct
+                                if not is_correct:
+                                    db.add_card_wrong(con, ss.user, int(c["id"]))
                                 st.rerun()
                         with ic2:
                             if st.button("모르겠어요", key=f"card_skip_{c['id']}_{card_mode}", width="stretch"):
                                 ss[result_key] = False
+                                db.add_card_wrong(con, ss.user, int(c["id"]))
                                 st.rerun()
                     else:
                         if result:
@@ -790,6 +797,36 @@ elif ss.nav == "개념노트":
                 ss.card_idx = 0
                 ss.card_flipped = False
                 st.rerun()
+
+            st.divider()
+            card_wrong_ids = db.get_card_wrong_ids(con, ss.user)
+            if st.button(f"📋 카드 오답 목록 보기 ({len(card_wrong_ids)}개)", width="stretch"):
+                ss.card_wrong_view = not ss.card_wrong_view
+                st.rerun()
+            if ss.card_wrong_view:
+                if not card_wrong_ids:
+                    st.caption("아직 단어 입력형·빈칸 채우기에서 틀린 개념이 없습니다.")
+                else:
+                    if st.button("전체 지우기", key="card_wrong_clear_all"):
+                        db.clear_card_wrong(con, ss.user)
+                        st.rerun()
+                    for wqid in card_wrong_ids:
+                        wc = QUESTIONS.get(wqid)
+                        if wc is None:
+                            continue
+                        w_answer = [wc["choice1"], wc["choice2"], wc["choice3"], wc["choice4"]][wc["answer"] - 1]
+                        with st.container(border=True):
+                            st.markdown(
+                                f'<span class="pill">{SUBJECT_LABEL[wc["subject"]]}</span>'
+                                f'<span class="pill pill-tag">{wc["tag"]}</span>',
+                                unsafe_allow_html=True,
+                            )
+                            st.markdown(f"**{wc['question']}**")
+                            st.markdown(f":green[정답: {w_answer}]")
+                            st.caption(wc["explanation"])
+                            if st.button("목록에서 지우기", key=f"card_wrong_del_{wqid}"):
+                                db.clear_card_wrong(con, ss.user, wqid)
+                                st.rerun()
 
     elif ss.concept_view == "노트":
         st.caption(f"{len(filtered)}개 개념을 과목·태그별로 정리했습니다.")
