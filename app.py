@@ -177,6 +177,27 @@ def pick_exam_pool():
     return ids
 
 
+def pick_cbt_pool(subjects, limit=None):
+    """CBT 연습 모드: 선택한 과목의 기출문제 중 무작위로 뽑는다."""
+    ids = [qid for qid in CBT_IDS if QUESTIONS[qid]["subject"] in subjects]
+    random.shuffle(ids)
+    if limit:
+        ids = ids[:limit]
+    return ids
+
+
+def pick_cbt_exam_pool():
+    """CBT 실전 모드: 실제 ADsP 출제 기준(1과목10·2과목10·3과목30)과 동일한 비율로
+    기출문제 풀에서 무작위 출제한다."""
+    ids = []
+    for s, n in EXAM_SUBJECT_COUNTS.items():
+        subj_ids = [qid for qid in CBT_IDS if QUESTIONS[qid]["subject"] == s]
+        random.shuffle(subj_ids)
+        ids.extend(subj_ids[:n])
+    random.shuffle(ids)
+    return ids
+
+
 # ---------- session state ----------
 ss = st.session_state
 ss.setdefault("user", "")
@@ -196,6 +217,7 @@ ss.setdefault("cbt_graded", False)
 ss.setdefault("cbt_submitted", False)
 ss.setdefault("cbt_checked", set())
 ss.setdefault("cbt_recorded", set())
+ss.setdefault("cbt_exam_subject_correct", {})
 ss.setdefault("concept_view", "카드")
 ss.setdefault("card_idx", 0)
 ss.setdefault("card_flipped", False)
@@ -227,15 +249,14 @@ def quit_quiz():
     ss.exam_mode = False
 
 
-def start_cbt(view, subjects):
-    ids = [qid for qid in CBT_IDS if QUESTIONS[qid]["subject"] in subjects]
-    random.shuffle(ids)
+def start_cbt(view, ids):
     ss.cbt_view = view
     ss.cbt_ids = ids
     ss.cbt_graded = False
     ss.cbt_submitted = False
     ss.cbt_checked = set()
     ss.cbt_recorded = set()
+    ss.cbt_exam_subject_correct = {1: 0, 2: 0, 3: 0}
     ss["_pending_nav"] = "CBT 모드"
 
 
@@ -246,6 +267,7 @@ def quit_cbt():
     ss.cbt_submitted = False
     ss.cbt_checked = set()
     ss.cbt_recorded = set()
+    ss.cbt_exam_subject_correct = {}
 
 
 # 다른 탭의 버튼(오답 복습, 집중 풀기 등)이 예약해 둔 탭 전환을 위젯이 그려지기 전에 반영한다.
@@ -445,27 +467,26 @@ elif ss.nav == "CBT 모드":
         st.subheader("CBT 모드 — 실제 기출복원 문제")
         st.caption(f"정답·해설이 확인된 ADsP 기출복원 문제 {len(CBT_IDS)}문항으로 연습합니다 (1·2·3과목).")
 
+        with st.container(border=True):
+            st.markdown("**실전 모드** — 실제 ADsP 출제 기준(1과목 10·2과목 10·3과목 30, 총 50문항)으로 합격/과락 여부까지 진단합니다.")
+            st.caption("모든 문제를 푼 뒤 제출 버튼을 누르면 채점되고, 그 이후에 문제별 해설을 볼 수 있어요.")
+            if st.button("실전 모드 시작 (50문항)", type="primary", width="stretch"):
+                start_cbt("exam", pick_cbt_exam_pool())
+                st.rerun()
+
+        st.markdown("#### 연습 모드")
+        st.caption("문제마다 힌트·해설을 바로 볼 수 있고, 오답노트에 직접 표시할 수 있어요. 한 번에 채점도 가능합니다.")
         cbt_subject_choice = st.radio("과목 선택", ["전체", "1과목", "2과목", "3과목"], horizontal=True, key="cbt_subject_choice")
+        cbt_count_choice = st.radio("문제 수", ["10문제", "20문제", "전체"], horizontal=True, key="cbt_count_choice")
         if cbt_subject_choice == "전체":
             cbt_subjects = [1, 2, 3]
         else:
             cbt_subjects = [int(cbt_subject_choice[0])]
+        cbt_limit = None if cbt_count_choice == "전체" else int(cbt_count_choice.replace("문제", ""))
 
-        col_a, col_b = st.columns(2)
-        with col_a:
-            with st.container(border=True):
-                st.markdown("**연습 모드**")
-                st.caption("문제마다 힌트·해설을 바로 볼 수 있고, 오답노트에 직접 표시할 수 있어요. 한 번에 채점도 가능합니다.")
-                if st.button("연습 모드 시작", width="stretch"):
-                    start_cbt("practice", cbt_subjects)
-                    st.rerun()
-        with col_b:
-            with st.container(border=True):
-                st.markdown("**실전 모드**")
-                st.caption("모든 문제를 푼 뒤 제출 버튼을 누르면 채점되고, 그 이후에 문제별 해설을 볼 수 있어요.")
-                if st.button("실전 모드 시작", width="stretch"):
-                    start_cbt("exam", cbt_subjects)
-                    st.rerun()
+        if st.button("연습 모드 시작", width="stretch"):
+            start_cbt("practice", pick_cbt_pool(cbt_subjects, cbt_limit))
+            st.rerun()
 
     elif ss.cbt_view == "practice":
         st.subheader("CBT 연습 모드")
@@ -532,11 +553,57 @@ elif ss.nav == "CBT 모드":
         st.progress(answered_n / len(ss.cbt_ids) if ss.cbt_ids else 0, text=f"응답 {answered_n} / {len(ss.cbt_ids)}")
 
         if ss.cbt_submitted:
+            total = len(ss.cbt_ids)
             correct_n = sum(
                 1 for qid in ss.cbt_ids
                 if cbt_selected_index(qid, "cbtexam_ans") == QUESTIONS[qid]["answer"] - 1
             )
-            st.metric("제출 결과", f"{correct_n} / {len(ss.cbt_ids)}")
+            subj_total = {1: 0, 2: 0, 3: 0}
+            for qid in ss.cbt_ids:
+                subj_total[QUESTIONS[qid]["subject"]] += 1
+
+            fail_subjects = []
+            rows_html = ""
+            for s in (1, 2, 3):
+                t = subj_total[s]
+                c = ss.cbt_exam_subject_correct.get(s, 0)
+                need = EXAM_MIN_CORRECT[s]
+                is_fail = t > 0 and c < min(need, t)
+                if is_fail:
+                    fail_subjects.append(s)
+                badge_cls = "subj-fail" if is_fail else "subj-ok"
+                badge_txt = "과락" if is_fail else "정상"
+                rows_html += (
+                    f'<div class="subj-row"><span>{SUBJECT_LABEL[s]}</span>'
+                    f'<span>{c}/{t}문항 · {c * POINTS_PER_Q}점'
+                    f'&nbsp;<span class="subj-badge {badge_cls}">{badge_txt}</span></span></div>'
+                )
+
+            total_score = correct_n * POINTS_PER_Q
+            overall_pass = (correct_n >= EXAM_TOTAL_PASS) and (len(fail_subjects) == 0)
+
+            if overall_pass:
+                st.markdown(
+                    f'<div class="exam-pass"><div class="big">합격 예상</div>'
+                    f'총점 {total_score}점 / 100점 (정답 {correct_n}/{total})</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                reason = []
+                if correct_n < EXAM_TOTAL_PASS:
+                    reason.append(f"총점 미달({total_score}점 &lt; 60점)")
+                if fail_subjects:
+                    reason.append("과락 과목: " + ", ".join(SUBJECT_LABEL[s] for s in fail_subjects))
+                st.markdown(
+                    f'<div class="exam-fail"><div class="big">불합격 예상</div>'
+                    f'총점 {total_score}점 / 100점 (정답 {correct_n}/{total})<br>'
+                    f'{" · ".join(reason)}</div>',
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown("##### 과목별 성적")
+            st.markdown(rows_html, unsafe_allow_html=True)
+            st.caption("합격 기준: 총점 60점 이상 + 과목별 40% 미만(과락) 없음. 실제 채점 기준과 다를 수 있으니 참고용으로 확인하세요.")
 
         for qid in ss.cbt_ids:
             q = QUESTIONS[qid]
@@ -564,11 +631,16 @@ elif ss.nav == "CBT 모드":
         st.divider()
         if not ss.cbt_submitted:
             if st.button("제출하기", type="primary", width="stretch"):
+                subject_correct = {1: 0, 2: 0, 3: 0}
                 for qid in ss.cbt_ids:
                     sel_idx = cbt_selected_index(qid, "cbtexam_ans")
                     if sel_idx is not None:
                         q = QUESTIONS[qid]
-                        db.record_attempt(con, ss.user, int(qid), sel_idx, sel_idx == q["answer"] - 1)
+                        is_correct = sel_idx == q["answer"] - 1
+                        db.record_attempt(con, ss.user, int(qid), sel_idx, is_correct)
+                        if is_correct:
+                            subject_correct[q["subject"]] += 1
+                ss.cbt_exam_subject_correct = subject_correct
                 ss.cbt_submitted = True
                 st.rerun()
         else:
