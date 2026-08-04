@@ -8,7 +8,21 @@ import streamlit as st
 import build_db
 import db
 
-if not os.path.exists(db.DB_PATH):
+_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+_SOURCE_CSVS = [os.path.join(_DATA_DIR, "questions.csv"), os.path.join(_DATA_DIR, "cbt_questions.csv")]
+
+
+def _db_is_stale():
+    # 배포 환경(Streamlit Cloud)은 git pull만으로 코드를 갱신하는 경우가 있어,
+    # 예전에 생성된 quiz.db가 새 CSV 내용을 반영하지 못한 채 그대로 남을 수 있다.
+    # CSV가 DB보다 최신이면 재생성해서 코드 배포와 데이터가 항상 일치하도록 한다.
+    if not os.path.exists(db.DB_PATH):
+        return True
+    db_mtime = os.path.getmtime(db.DB_PATH)
+    return any(os.path.exists(p) and os.path.getmtime(p) > db_mtime for p in _SOURCE_CSVS)
+
+
+if _db_is_stale():
     build_db.main()
 
 st.set_page_config(page_title="ADsP 핵심요약 퀴즈", page_icon="📊", layout="centered")
