@@ -7,6 +7,8 @@
 import csv
 import os
 
+from cbt_source_44_49 import EXTRA_CBT_QUESTIONS
+
 CBT_QUESTIONS = [
     # === 1과목 데이터 이해 (기출 복원) ===
     {"s": 1, "t": "빅데이터 개념", "q": "다음 중 빅데이터 분석에 경제성을 제공해 준 결정적인 기술로 가장 적절한 것은?",
@@ -257,7 +259,7 @@ CBT_QUESTIONS = [
     {"s": 2, "t": "분석 수준진단", "q": "데이터 분석 수준진단 결과에서 기업에 필요한 데이터 및 분석기법은 부족하지만 조직의 준비도가 높은 단계는?",
      "c": ["확산형", "도입형", "준비형", "정착형"], "a": 1,
      "e": "도입형은 분석업무·기법은 부족하나 조직·인력의 준비도는 높은 단계이다."},
-]
+] + EXTRA_CBT_QUESTIONS
 
 OUT_DIR = os.path.join(os.path.dirname(__file__), "data")
 OUT_PATH = os.path.join(OUT_DIR, "cbt_questions.csv")
