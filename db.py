@@ -151,3 +151,26 @@ def clear_ox_wrong(con, user, concept_qid=None):
     else:
         con.execute("DELETE FROM ox_wrong WHERE user=? AND concept_qid=?", (user, concept_qid))
     con.commit()
+
+
+def add_card_wrong(con, user, concept_qid):
+    con.execute(
+        "INSERT OR REPLACE INTO card_wrong(user, concept_qid, ts) VALUES (?,?,?)",
+        (user, concept_qid, datetime.datetime.now().isoformat()),
+    )
+    con.commit()
+
+
+def get_card_wrong_ids(con, user):
+    rows = con.execute(
+        "SELECT concept_qid FROM card_wrong WHERE user=? ORDER BY ts DESC", (user,)
+    ).fetchall()
+    return [r["concept_qid"] for r in rows]
+
+
+def clear_card_wrong(con, user, concept_qid=None):
+    if concept_qid is None:
+        con.execute("DELETE FROM card_wrong WHERE user=?", (user,))
+    else:
+        con.execute("DELETE FROM card_wrong WHERE user=? AND concept_qid=?", (user, concept_qid))
+    con.commit()

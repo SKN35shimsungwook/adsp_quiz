@@ -98,6 +98,17 @@ def main():
         )
     """)
 
+    # 개념노트 카드(단어 입력형/빈칸 채우기)에서 틀린 개념. 위 ox_wrong과 마찬가지로 별도 관리.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS card_wrong (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user TEXT NOT NULL,
+            concept_qid INTEGER NOT NULL REFERENCES questions(id),
+            ts TEXT NOT NULL,
+            UNIQUE(user, concept_qid)
+        )
+    """)
+
     con.commit()
     n_q = cur.execute("SELECT COUNT(*) FROM questions").fetchone()[0]
     n_concept = cur.execute("SELECT COUNT(*) FROM questions WHERE source='concept'").fetchone()[0]
