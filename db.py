@@ -128,3 +128,26 @@ def get_flagged_ids(con, user):
         "SELECT question_id FROM flags WHERE user=? ORDER BY ts DESC", (user,)
     ).fetchall()
     return [r["question_id"] for r in rows]
+
+
+def add_ox_wrong(con, user, concept_qid):
+    con.execute(
+        "INSERT OR REPLACE INTO ox_wrong(user, concept_qid, ts) VALUES (?,?,?)",
+        (user, concept_qid, datetime.datetime.now().isoformat()),
+    )
+    con.commit()
+
+
+def get_ox_wrong_ids(con, user):
+    rows = con.execute(
+        "SELECT concept_qid FROM ox_wrong WHERE user=? ORDER BY ts DESC", (user,)
+    ).fetchall()
+    return [r["concept_qid"] for r in rows]
+
+
+def clear_ox_wrong(con, user, concept_qid=None):
+    if concept_qid is None:
+        con.execute("DELETE FROM ox_wrong WHERE user=?", (user,))
+    else:
+        con.execute("DELETE FROM ox_wrong WHERE user=? AND concept_qid=?", (user, concept_qid))
+    con.commit()

@@ -87,6 +87,17 @@ def main():
         )
     """)
 
+    # 개념노트 OX 퀴즈에서 틀린 개념. 퀴즈 오답노트(attempts/flags)와는 별개로 관리한다.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS ox_wrong (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user TEXT NOT NULL,
+            concept_qid INTEGER NOT NULL REFERENCES questions(id),
+            ts TEXT NOT NULL,
+            UNIQUE(user, concept_qid)
+        )
+    """)
+
     con.commit()
     n_q = cur.execute("SELECT COUNT(*) FROM questions").fetchone()[0]
     n_concept = cur.execute("SELECT COUNT(*) FROM questions WHERE source='concept'").fetchone()[0]

@@ -2,6 +2,7 @@
 """ADsP(데이터분석 준전문가) 핵심요약 퀴즈 (Streamlit + SQLite)"""
 import os
 import random
+import re
 
 import streamlit as st
 
@@ -154,6 +155,37 @@ def pick_pool(subjects, limit=None):
     return pool
 
 
+def _normalize_answer(s):
+    return re.sub(r"\s+", "", s.strip().lower())
+
+
+def _answer_matches(user_input, correct_text):
+    """개념 카드 입력형 채점: 괄호 안 영문 약어/원어 표기도 정답으로 인정한다.
+    예) "표준편차(SD)" -> "표준편차" 또는 "SD" 모두 정답 처리."""
+    if not user_input or not user_input.strip():
+        return False
+    variants = {correct_text}
+    m = re.match(r"^(.*?)\s*\(([^)]+)\)\s*$", correct_text)
+    if m:
+        variants.add(m.group(1).strip())
+        variants.add(m.group(2).strip())
+    u = _normalize_answer(user_input)
+    return any(u == _normalize_answer(v) for v in variants if v)
+
+
+def make_blank_sentence(explanation, answer_text):
+    """해설 문장 안에서 정답 텍스트(또는 괄호 앞부분)를 찾아 빈칸으로 치환한다.
+    찾지 못하면 None을 반환해 호출부가 단어 입력형으로 대체하도록 한다."""
+    candidates = [answer_text]
+    m = re.match(r"^(.*?)\s*\(([^)]+)\)\s*$", answer_text)
+    if m:
+        candidates = [answer_text, m.group(1).strip()]
+    for cand in candidates:
+        if cand and cand in explanation:
+            return explanation.replace(cand, "〔　　　　〕", 1)
+    return None
+
+
 def cbt_selected_index(qid, prefix):
     """CBT 라디오 위젯(key=f"{prefix}_{qid}")에 저장된 '① 보기텍스트' 문자열을 0~3 인덱스로 변환한다."""
     sel = st.session_state.get(f"{prefix}_{qid}")
@@ -221,11 +253,13 @@ ss.setdefault("cbt_exam_subject_correct", {})
 ss.setdefault("concept_view", "카드")
 ss.setdefault("card_idx", 0)
 ss.setdefault("card_flipped", False)
+ss.setdefault("card_mode", "뒤집기")
 ss.setdefault("ox_pool", None)
 ss.setdefault("ox_pos", 0)
 ss.setdefault("ox_correct", 0)
 ss.setdefault("ox_answered", False)
 ss.setdefault("ox_choice", None)
+ss.setdefault("ox_wrong_view", False)
 
 
 def start_quiz(ids, title, exam_mode=False):
@@ -677,6 +711,13 @@ elif ss.nav == "개념노트":
             c = filtered[ss.card_idx]
             choices = [c["choice1"], c["choice2"], c["choice3"], c["choice4"]]
             answer_idx = c["answer"] - 1
+            answer_text = choices[answer_idx]
+
+            card_mode = st.radio(
+                "확인 방식", ["뒤집기", "단어 입력형", "빈칸 채우기"], horizontal=True, key="card_mode"
+            )
+            result_key = f"card_result_{c['id']}_{card_mode}"
+
             st.progress((ss.card_idx + 1) / len(filtered), text=f"{ss.card_idx + 1} / {len(filtered)}")
             with st.container(border=True):
                 st.markdown(
@@ -684,12 +725,49 @@ elif ss.nav == "개념노트":
                     f'<span class="pill pill-tag">{c["tag"]}</span>',
                     unsafe_allow_html=True,
                 )
-                st.markdown(f'<div class="qbox">{c["question"]}</div>', unsafe_allow_html=True)
-                if ss.card_flipped:
-                    st.markdown(f":green[**정답: {choices[answer_idx]}**]")
-                    st.info(c["explanation"])
+
+                if card_mode == "뒤집기":
+                    st.markdown(f'<div class="qbox">{c["question"]}</div>', unsafe_allow_html=True)
+                    if ss.card_flipped:
+                        st.markdown(f":green[**정답: {answer_text}**]")
+                        st.info(c["explanation"])
+                    else:
+                        st.caption("정답과 해설을 보려면 아래 버튼을 눌러보세요.")
                 else:
-                    st.caption("정답과 해설을 보려면 아래 버튼을 눌러보세요.")
+                    if card_mode == "단어 입력형":
+                        st.markdown(f'<div class="qbox">{c["question"]}</div>', unsafe_allow_html=True)
+                    else:
+                        blank_sentence = make_blank_sentence(c["explanation"], answer_text)
+                        if blank_sentence is None:
+                            st.caption("이 개념은 해설에서 빈칸을 만들 수 없어 단어 입력형으로 표시합니다.")
+                            st.markdown(f'<div class="qbox">{c["question"]}</div>', unsafe_allow_html=True)
+                        else:
+                            st.markdown(f'<div class="qbox">{blank_sentence}</div>', unsafe_allow_html=True)
+
+                    result = ss.get(result_key)
+                    if result is None:
+                        user_ans = st.text_input(
+                            "정답 입력", key=f"card_input_{c['id']}_{card_mode}",
+                            label_visibility="collapsed", placeholder="정답을 입력하세요",
+                        )
+                        ic1, ic2 = st.columns([1, 1])
+                        with ic1:
+                            if st.button("확인", key=f"card_check_{c['id']}_{card_mode}", width="stretch"):
+                                ss[result_key] = _answer_matches(user_ans, answer_text)
+                                st.rerun()
+                        with ic2:
+                            if st.button("모르겠어요", key=f"card_skip_{c['id']}_{card_mode}", width="stretch"):
+                                ss[result_key] = False
+                                st.rerun()
+                    else:
+                        if result:
+                            st.success(f"정답입니다! **{answer_text}**")
+                        else:
+                            st.error(f"아쉬워요. 정답은 **{answer_text}** 입니다.")
+                        st.info(c["explanation"])
+                        if st.button("다시 시도", key=f"card_retry_{c['id']}_{card_mode}"):
+                            del ss[result_key]
+                            st.rerun()
 
             b1, b2, b3 = st.columns([1, 1, 1])
             with b1:
@@ -698,9 +776,10 @@ elif ss.nav == "개념노트":
                     ss.card_flipped = False
                     st.rerun()
             with b2:
-                if st.button("정답 보기" if not ss.card_flipped else "다시 가리기", width="stretch", type="primary"):
-                    ss.card_flipped = not ss.card_flipped
-                    st.rerun()
+                if card_mode == "뒤집기":
+                    if st.button("정답 보기" if not ss.card_flipped else "다시 가리기", width="stretch", type="primary"):
+                        ss.card_flipped = not ss.card_flipped
+                        st.rerun()
             with b3:
                 if st.button("다음 ▶", width="stretch", disabled=ss.card_idx >= len(filtered) - 1):
                     ss.card_idx += 1
@@ -738,7 +817,7 @@ elif ss.nav == "개념노트":
                         wrong_idx = random.choice([i for i in range(4) if i != correct_idx])
                         statement = choices[wrong_idx]
                     pool.append({
-                        "subject": c["subject"], "tag": c["tag"], "stem": c["question"],
+                        "qid": c["id"], "subject": c["subject"], "tag": c["tag"], "stem": c["question"],
                         "statement": statement, "truth": is_true, "explanation": c["explanation"],
                     })
                 random.shuffle(pool)
@@ -748,7 +827,37 @@ elif ss.nav == "개념노트":
                 ss.ox_answered = False
                 ss.ox_choice = None
                 st.rerun()
-            st.caption("문제 설명이 참(O)인지 거짓(X)인지 빠르게 판단하는 암기 확인 퀴즈입니다. (이 결과는 오답노트에는 기록되지 않습니다)")
+            st.caption("문제 설명이 참(O)인지 거짓(X)인지 빠르게 판단하는 암기 확인 퀴즈입니다. 일반 오답노트에는 기록되지 않고, 틀린 개념만 아래 'OX 오답 목록'에 따로 쌓입니다.")
+
+            st.divider()
+            ox_wrong_ids = db.get_ox_wrong_ids(con, ss.user)
+            if st.button(f"📋 OX 오답 목록 보기 ({len(ox_wrong_ids)}개)", width="stretch"):
+                ss.ox_wrong_view = not ss.ox_wrong_view
+                st.rerun()
+            if ss.ox_wrong_view:
+                if not ox_wrong_ids:
+                    st.caption("아직 OX 퀴즈에서 틀린 개념이 없습니다.")
+                else:
+                    if st.button("전체 지우기", key="ox_wrong_clear_all"):
+                        db.clear_ox_wrong(con, ss.user)
+                        st.rerun()
+                    for wqid in ox_wrong_ids:
+                        wc = QUESTIONS.get(wqid)
+                        if wc is None:
+                            continue
+                        w_answer = [wc["choice1"], wc["choice2"], wc["choice3"], wc["choice4"]][wc["answer"] - 1]
+                        with st.container(border=True):
+                            st.markdown(
+                                f'<span class="pill">{SUBJECT_LABEL[wc["subject"]]}</span>'
+                                f'<span class="pill pill-tag">{wc["tag"]}</span>',
+                                unsafe_allow_html=True,
+                            )
+                            st.markdown(f"**{wc['question']}**")
+                            st.markdown(f":green[정답: {w_answer}]")
+                            st.caption(wc["explanation"])
+                            if st.button("목록에서 지우기", key=f"ox_wrong_del_{wqid}"):
+                                db.clear_ox_wrong(con, ss.user, wqid)
+                                st.rerun()
         elif ss.ox_pos < len(ss.ox_pool):
             item = ss.ox_pool[ss.ox_pos]
             total = len(ss.ox_pool)
@@ -770,6 +879,8 @@ elif ss.nav == "개념노트":
                         ss.ox_choice = True
                         if item["truth"] is True:
                             ss.ox_correct += 1
+                        else:
+                            db.add_ox_wrong(con, ss.user, item["qid"])
                         st.rerun()
                 with xcol:
                     if st.button("❌ 틀리다(X)", width="stretch"):
@@ -777,6 +888,8 @@ elif ss.nav == "개념노트":
                         ss.ox_choice = False
                         if item["truth"] is False:
                             ss.ox_correct += 1
+                        else:
+                            db.add_ox_wrong(con, ss.user, item["qid"])
                         st.rerun()
             else:
                 is_right = ss.ox_choice == item["truth"]
