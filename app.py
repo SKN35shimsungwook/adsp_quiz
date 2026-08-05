@@ -186,6 +186,38 @@ def make_blank_sentence(explanation, answer_text):
     return None
 
 
+def group_ids_by_tag(ids):
+    """qid 목록을 (과목, 태그) 기준으로 묶어 과목·태그 순으로 정렬해 반환한다."""
+    groups = {}
+    for qid in ids:
+        q = QUESTIONS.get(qid)
+        if q is None:
+            continue
+        key = (q["subject"], q["tag"])
+        groups.setdefault(key, []).append(qid)
+    return dict(sorted(groups.items(), key=lambda kv: (kv[0][0], kv[0][1])))
+
+
+def build_ox_pool(concepts):
+    """개념 목록으로부터 OX 퀴즈 문제 풀을 만든다(참/거짓 문장을 무작위로 섞어 생성)."""
+    pool = []
+    for c in concepts:
+        choices = [c["choice1"], c["choice2"], c["choice3"], c["choice4"]]
+        correct_idx = c["answer"] - 1
+        is_true = random.random() < 0.5
+        if is_true:
+            statement = choices[correct_idx]
+        else:
+            wrong_idx = random.choice([i for i in range(4) if i != correct_idx])
+            statement = choices[wrong_idx]
+        pool.append({
+            "qid": c["id"], "subject": c["subject"], "tag": c["tag"], "stem": c["question"],
+            "statement": statement, "truth": is_true, "explanation": c["explanation"],
+        })
+    random.shuffle(pool)
+    return pool
+
+
 def cbt_selected_index(qid, prefix):
     """CBT 라디오 위젯(key=f"{prefix}_{qid}")에 저장된 '① 보기텍스트' 문자열을 0~3 인덱스로 변환한다."""
     sel = st.session_state.get(f"{prefix}_{qid}")
@@ -758,7 +790,9 @@ elif ss.nav == "개념노트":
                             if st.button("확인", key=f"card_check_{c['id']}_{card_mode}", width="stretch"):
                                 is_correct = _answer_matches(user_ans, answer_text)
                                 ss[result_key] = is_correct
-                                if not is_correct:
+                                if is_correct:
+                                    db.clear_card_wrong(con, ss.user, int(c["id"]))
+                                else:
                                     db.add_card_wrong(con, ss.user, int(c["id"]))
                                 st.rerun()
                         with ic2:
@@ -792,41 +826,69 @@ elif ss.nav == "개념노트":
                     ss.card_idx += 1
                     ss.card_flipped = False
                     st.rerun()
-            if st.button("🔀 순서 섞기"):
-                random.shuffle(filtered)
-                ss.card_idx = 0
-                ss.card_flipped = False
-                st.rerun()
+            sb1, sb2 = st.columns([1, 1])
+            with sb1:
+                if st.button("🔀 순서 섞기", width="stretch"):
+                    random.shuffle(filtered)
+                    ss.card_idx = 0
+                    ss.card_flipped = False
+                    st.rerun()
+            with sb2:
+                if card_mode != "뒤집기":
+                    if st.button("🔄 전체 리셋 (지금까지 푼 카드)", width="stretch"):
+                        for k in [k for k in ss.keys() if k.startswith("card_result_")]:
+                            del ss[k]
+                        st.rerun()
 
             st.divider()
             card_wrong_ids = db.get_card_wrong_ids(con, ss.user)
-            if st.button(f"📋 카드 오답 목록 보기 ({len(card_wrong_ids)}개)", width="stretch"):
+            if st.button(f"📋 카드 오답 · 개념별로 확인 ({len(card_wrong_ids)}개)", width="stretch"):
                 ss.card_wrong_view = not ss.card_wrong_view
                 st.rerun()
             if ss.card_wrong_view:
                 if not card_wrong_ids:
                     st.caption("아직 단어 입력형·빈칸 채우기에서 틀린 개념이 없습니다.")
                 else:
-                    if st.button("전체 지우기", key="card_wrong_clear_all"):
-                        db.clear_card_wrong(con, ss.user)
-                        st.rerun()
-                    for wqid in card_wrong_ids:
-                        wc = QUESTIONS.get(wqid)
-                        if wc is None:
-                            continue
-                        w_answer = [wc["choice1"], wc["choice2"], wc["choice3"], wc["choice4"]][wc["answer"] - 1]
-                        with st.container(border=True):
-                            st.markdown(
-                                f'<span class="pill">{SUBJECT_LABEL[wc["subject"]]}</span>'
-                                f'<span class="pill pill-tag">{wc["tag"]}</span>',
-                                unsafe_allow_html=True,
-                            )
-                            st.markdown(f"**{wc['question']}**")
-                            st.markdown(f":green[정답: {w_answer}]")
-                            st.caption(wc["explanation"])
-                            if st.button("목록에서 지우기", key=f"card_wrong_del_{wqid}"):
-                                db.clear_card_wrong(con, ss.user, wqid)
-                                st.rerun()
+                    st.caption("과목·개념별로 묶었습니다. 바로 정답을 입력해 다시 풀어보세요. 맞히면 자동으로 목록에서 빠집니다.")
+                    groups = group_ids_by_tag(card_wrong_ids)
+                    for (subject, tag), qids in groups.items():
+                        st.markdown(f'<div class="group-title">{SUBJECT_LABEL[subject]} · {tag}</div>', unsafe_allow_html=True)
+                        for wqid in qids:
+                            wc = QUESTIONS.get(wqid)
+                            if wc is None:
+                                continue
+                            w_choices = [wc["choice1"], wc["choice2"], wc["choice3"], wc["choice4"]]
+                            w_answer = w_choices[wc["answer"] - 1]
+                            retry_key = f"card_wrong_retry_{wqid}"
+                            with st.container(border=True):
+                                st.markdown(f"**{wc['question']}**")
+                                retry_result = ss.get(retry_key)
+                                if retry_result is None:
+                                    rc1, rc2, rc3 = st.columns([2, 1, 1])
+                                    with rc1:
+                                        retry_ans = st.text_input(
+                                            "정답 입력", key=f"card_wrong_retry_input_{wqid}",
+                                            label_visibility="collapsed", placeholder="정답을 입력하세요",
+                                        )
+                                    with rc2:
+                                        if st.button("확인", key=f"card_wrong_retry_check_{wqid}", width="stretch"):
+                                            is_correct = _answer_matches(retry_ans, w_answer)
+                                            if is_correct:
+                                                db.clear_card_wrong(con, ss.user, wqid)
+                                                st.rerun()
+                                            else:
+                                                ss[retry_key] = False
+                                                st.rerun()
+                                    with rc3:
+                                        if st.button("목록서 지우기", key=f"card_wrong_del_{wqid}", width="stretch"):
+                                            db.clear_card_wrong(con, ss.user, wqid)
+                                            st.rerun()
+                                else:
+                                    st.error(f"오답입니다. 정답: **{w_answer}**")
+                                    st.caption(wc["explanation"])
+                                    if st.button("다시 시도", key=f"card_wrong_retry_again_{wqid}"):
+                                        del ss[retry_key]
+                                        st.rerun()
 
     elif ss.concept_view == "노트":
         st.caption(f"{len(filtered)}개 개념을 과목·태그별로 정리했습니다.")
@@ -843,58 +905,71 @@ elif ss.nav == "개념노트":
     else:  # OX 퀴즈
         if ss.ox_pool is None:
             if st.button("OX 퀴즈 시작", type="primary", width="stretch"):
-                pool = []
-                for c in filtered:
-                    choices = [c["choice1"], c["choice2"], c["choice3"], c["choice4"]]
-                    correct_idx = c["answer"] - 1
-                    is_true = random.random() < 0.5
-                    if is_true:
-                        statement = choices[correct_idx]
-                    else:
-                        wrong_idx = random.choice([i for i in range(4) if i != correct_idx])
-                        statement = choices[wrong_idx]
-                    pool.append({
-                        "qid": c["id"], "subject": c["subject"], "tag": c["tag"], "stem": c["question"],
-                        "statement": statement, "truth": is_true, "explanation": c["explanation"],
-                    })
-                random.shuffle(pool)
-                ss.ox_pool = pool
+                ss.ox_pool = build_ox_pool(filtered)
                 ss.ox_pos = 0
                 ss.ox_correct = 0
                 ss.ox_answered = False
                 ss.ox_choice = None
                 st.rerun()
-            st.caption("문제 설명이 참(O)인지 거짓(X)인지 빠르게 판단하는 암기 확인 퀴즈입니다. 일반 오답노트에는 기록되지 않고, 틀린 개념만 아래 'OX 오답 목록'에 따로 쌓입니다.")
+            st.caption("문제 설명이 참(O)인지 거짓(X)인지 빠르게 판단하는 암기 확인 퀴즈입니다. 일반 오답노트에는 기록되지 않고, 틀린 개념만 아래 'OX 오답'에 따로 쌓입니다.")
 
             st.divider()
             ox_wrong_ids = db.get_ox_wrong_ids(con, ss.user)
-            if st.button(f"📋 OX 오답 목록 보기 ({len(ox_wrong_ids)}개)", width="stretch"):
+            if st.button(f"📋 OX 오답 · 개념별로 확인 ({len(ox_wrong_ids)}개)", width="stretch"):
                 ss.ox_wrong_view = not ss.ox_wrong_view
                 st.rerun()
             if ss.ox_wrong_view:
                 if not ox_wrong_ids:
                     st.caption("아직 OX 퀴즈에서 틀린 개념이 없습니다.")
                 else:
-                    if st.button("전체 지우기", key="ox_wrong_clear_all"):
-                        db.clear_ox_wrong(con, ss.user)
-                        st.rerun()
-                    for wqid in ox_wrong_ids:
-                        wc = QUESTIONS.get(wqid)
-                        if wc is None:
-                            continue
-                        w_answer = [wc["choice1"], wc["choice2"], wc["choice3"], wc["choice4"]][wc["answer"] - 1]
-                        with st.container(border=True):
-                            st.markdown(
-                                f'<span class="pill">{SUBJECT_LABEL[wc["subject"]]}</span>'
-                                f'<span class="pill pill-tag">{wc["tag"]}</span>',
-                                unsafe_allow_html=True,
-                            )
-                            st.markdown(f"**{wc['question']}**")
-                            st.markdown(f":green[정답: {w_answer}]")
-                            st.caption(wc["explanation"])
-                            if st.button("목록에서 지우기", key=f"ox_wrong_del_{wqid}"):
-                                db.clear_ox_wrong(con, ss.user, wqid)
-                                st.rerun()
+                    st.caption("과목·개념별로 묶었습니다. 바로 O/X로 다시 풀어보세요. 맞히면 자동으로 목록에서 빠집니다.")
+                    groups = group_ids_by_tag(ox_wrong_ids)
+                    for (subject, tag), qids in groups.items():
+                        st.markdown(f'<div class="group-title">{SUBJECT_LABEL[subject]} · {tag}</div>', unsafe_allow_html=True)
+                        for wqid in qids:
+                            wc = QUESTIONS.get(wqid)
+                            if wc is None:
+                                continue
+                            item_key = f"ox_wrong_item_{wqid}"
+                            if item_key not in ss:
+                                ss[item_key] = build_ox_pool([wc])[0]
+                            item = ss[item_key]
+                            with st.container(border=True):
+                                st.markdown(f"**{item['stem']}**")
+                                st.markdown(f'<div class="qbox">{item["statement"]}</div>', unsafe_allow_html=True)
+                                if not item.get("answered"):
+                                    rc1, rc2, rc3 = st.columns([1, 1, 1])
+                                    with rc1:
+                                        if st.button("⭕ 참", key=f"ox_wrong_o_{wqid}", width="stretch"):
+                                            if item["truth"] is True:
+                                                db.clear_ox_wrong(con, ss.user, wqid)
+                                                del ss[item_key]
+                                            else:
+                                                item["answered"] = True
+                                                item["choice"] = True
+                                            st.rerun()
+                                    with rc2:
+                                        if st.button("❌ 거짓", key=f"ox_wrong_x_{wqid}", width="stretch"):
+                                            if item["truth"] is False:
+                                                db.clear_ox_wrong(con, ss.user, wqid)
+                                                del ss[item_key]
+                                            else:
+                                                item["answered"] = True
+                                                item["choice"] = False
+                                            st.rerun()
+                                    with rc3:
+                                        if st.button("목록서 지우기", key=f"ox_wrong_del_{wqid}", width="stretch"):
+                                            db.clear_ox_wrong(con, ss.user, wqid)
+                                            if item_key in ss:
+                                                del ss[item_key]
+                                            st.rerun()
+                                else:
+                                    answer_label = "O(참)" if item["truth"] else "X(거짓)"
+                                    st.error(f"틀렸습니다. 정답은 {answer_label}입니다.")
+                                    st.caption(item["explanation"])
+                                    if st.button("다시 시도", key=f"ox_wrong_retry_{wqid}"):
+                                        del ss[item_key]
+                                        st.rerun()
         elif ss.ox_pos < len(ss.ox_pool):
             item = ss.ox_pool[ss.ox_pos]
             total = len(ss.ox_pool)
