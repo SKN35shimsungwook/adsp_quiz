@@ -1,5 +1,7 @@
 # 📊 ADsP 핵심요약 퀴즈
 
+**🔗 바로 실행해 보기:** https://adspquiz-mqqm5lwq64gaxfepufdkes.streamlit.app
+
 **ADsP(데이터분석 준전문가)** 자격시험 핵심 요약 문제를 풀면서 공부하는 Streamlit 퀴즈 앱이에요.
 데이터 이해, 데이터 분석 기획, 데이터 분석 과목별 문제를 SQLite DB로 관리해요.
 
